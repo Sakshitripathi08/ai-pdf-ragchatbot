@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import List
+
+import faiss
+import fitz
+import numpy as np
+from sentence_transformers import SentenceTransformer
+from openai import OpenAI
+
+from app.config import OPENAI_API_KEY, OPENAI_MODEL, VECTOR_STORE_DIR
+
+
+class PDFRAGStore:
+    def __init__(self) -> None:
+        self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        self.dim = self.embedding_model.get_sentence_embedding_dimension()
+        self.index_path = VECTOR_STORE_DIR / "faiss_index.bin"
+        self.metadata_path = VECTOR_STORE_DIR / "metadata.json"
+
+        if self.index_path.exists():
+            self.index = faiss.read_index(str(self.index_path))
+        else:
+            self.index = faiss.IndexFlatIP(self.dim)
+
+        if self.metadata_path.exists():
+            with open(self.metadata_path, "r", encoding="utf-8") as f:
+                self.documents: List[str] = json.load(f)
+        else:
+            self.documents = []
+
+        self.client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+    def _chunk_text(self, text: str, chunk_size: int = 800, overlap: int = 120) -> List[str]:
+        chunks: List[str] = []
+        start = 0
+        text = text.strip()
+        if not text:
+            return chunks
+
+        while start < len(text):
+            end = min(start + chunk_size, len(text))
+            chunk = text[start:end]
+            if len(chunk) < 200 and chunks:
+                chunks[-1] += " " + chunk
+                break
+            chunks.append(chunk.strip())
+            start = max(start + chunk_size - overlap, start + 1)
+
+        return [c for c in chunks if c]
+
+    def _extract_text_from_pdf(self, pdf_path: Path) -> str:
+        doc = fitz.open(pdf_path)
+        pages: List[str] = []
+        for page in doc:
+            pages.append(page.get_text("text"))
+        doc.close()
+        return "\n\n".join(pages)
+
+    def index_pdf(self, file_path: Path) -> int:
+        text = self._extract_text_from_pdf(file_path)
+        chunks = self._chunk_text(text)
+        if not chunks:
+            return 0
+
+        embeddings = self.embedding_model.encode(chunks, convert_to_numpy=True, normalize_embeddings=True)
+        self.index.add(np.asarray(embeddings, dtype='float32'))
+
+        self.documents.extend(chunks)
+        self._save_index()
+        return len(chunks)
+
+    def _save_index(self) -> None:
+        faiss.write_index(self.index, str(self.index_path))
+        with open(self.metadata_path, "w", encoding="utf-8") as f:
+            json.dump(self.documents, f, ensure_ascii=False)
+
+    def search(self, question: str, top_k: int = 4):
+        query_embedding = self.embedding_model.encode([question], convert_to_numpy=True, normalize_embeddings=True)
+        scores, indices = self.index.search(np.asarray(query_embedding, dtype='float32'), min(top_k, len(self.documents)))
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx < 0 or idx >= len(self.documents):
+                continue
+            results.append({"score": float(score), "text": self.documents[int(idx)]})
+        return results
+
+    def ask(self, question: str) -> str:
+        context_docs = self.search(question)
+        if not context_docs:
+            return "No indexed PDF content is available yet. Please upload a PDF first."
+
+        context = "\n\n".join(doc["text"] for doc in context_docs)
+
+        if self.client is None:
+            return (
+                "OpenAI API key is not set. Based on the indexed document content, the best match appears to be: "
+                + context_docs[0]["text"][:1000]
+            )
+
+        completion = self.client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You answer questions using the provided PDF context. Be concise but accurate and cite facts from the context."
+                },
+                {
+                    "role": "user",
+                    "content": f"Context:\n{context}\n\nQuestion:\n{question}"
+                },
+            ],
+            temperature=0.2,
+            max_tokens=500,
+        )
+        return completion.choices[0].message.content.strip()

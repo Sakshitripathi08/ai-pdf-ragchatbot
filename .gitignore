@@ -1,0 +1,10 @@
+# Python-generated files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.env
+uploads/
+vector_store/
+.DS_Store
