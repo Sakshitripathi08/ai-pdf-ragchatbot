@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: ai-pdf-ragchatbot
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/ready
+    autoDeploy: true
+    disk:
+      name: pdf-rag-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: API_KEY
+        generateValue: true
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: APP_NAME
+        value: AI PDF RAG Chatbot
+      - key: UPLOAD_DIR
+        value: /data/uploads
+      - key: VECTOR_STORE_DIR
+        value: /data/vector_store
+      - key: MAX_UPLOAD_BYTES
+        value: "20971520"

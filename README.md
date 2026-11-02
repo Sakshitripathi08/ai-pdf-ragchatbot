@@ -1,6 +1,19 @@
 # AI PDF RAG Chatbot
 
-A FastAPI starter for extracting text from PDFs, retrieving relevant passages with FAISS, and answering questions with an OpenAI-compatible chat model.
+A FastAPI app that extracts PDF text, retrieves relevant passages with FAISS, and answers questions with an OpenAI-compatible chat model.
+
+## Deploy to Render
+
+This repository includes a Render Blueprint in `render.yaml`.
+
+1. Push this repository to GitHub and sign in to [Render](https://render.com/).
+2. In Render, choose **New → Blueprint**, connect `SakshiCpp/ai-pdf-ragchatbot`, and apply the Blueprint.
+3. Render creates a Docker web service, a persistent disk mounted at `/data`, and a generated `API_KEY`. Enter your `OPENAI_API_KEY` in the Blueprint prompt/dashboard if you want model-generated answers. Keep it secret.
+4. Wait for the first build and deploy to finish. The first PDF upload initializes/downloads the sentence-transformer model, so allow extra time and ensure outbound network access.
+5. Open the service's `onrender.com` URL. In the app, paste the service's `API_KEY` (Render Dashboard → service → Environment) into the access-key field. The key is held only in the current browser tab. Upload a PDF, then ask questions.
+6. Check service health at `/health/ready` and `/health/live`.
+
+The Blueprint configures one instance because the local FAISS index requires single-writer local storage. The attached persistent disk preserves uploads and the index across deploys, but prevents horizontal scaling and may affect availability during deploys. For multi-instance scale, migrate storage and vector search to managed/shared services. Render may charge for the selected instance and disk; review current pricing before applying.
 
 ## Run locally
 
@@ -15,17 +28,6 @@ cp .env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open http://127.0.0.1:8000. The first upload downloads the sentence-transformer model, so initial indexing can take time and needs network access.
-
-## Docker deployment
-
-1. Set strong, secret values for `API_KEY` and `OPENAI_API_KEY` in `.env`; do not commit `.env`.
-2. Start with `docker compose up --build -d`.
-3. Put a TLS-terminating reverse proxy/load balancer in front of the service before public exposure. Keep the service bound to localhost unless network ingress is intentionally configured.
-4. Back up the `app_data` volume. The local FAISS index is single-instance storage; do not run multiple replicas against it. For horizontal scale, replace it with shared object storage and a managed vector database.
-
-API requests need `Authorization: Bearer <API_KEY>` when `API_KEY` is configured. If no key is configured, API authentication is disabled; do not expose that configuration publicly.
-
 ## API
 
 - `GET /health/live` — process liveness
@@ -33,18 +35,10 @@ API requests need `Authorization: Bearer <API_KEY>` when `API_KEY` is configured
 - `POST /api/upload` — multipart field `file`; default upload limit is 20 MiB
 - `POST /api/chat` — JSON body `{"question":"..."}`
 
-Example:
+Protected API requests require `Authorization: Bearer <API_KEY>`.
 
-```bash
-curl -H "Authorization: Bearer $API_KEY" -F "file=@document.pdf" http://127.0.0.1:8000/api/upload
-curl -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d '{"question":"What is this document about?"}' http://127.0.0.1:8000/api/chat
-```
+## Configuration and operations
 
-## Configuration
+See `.env.example`. `MAX_UPLOAD_BYTES` controls the maximum accepted PDF size. `OPENAI_API_KEY` enables model-generated answers; without it, the API returns a relevant retrieved passage. Store secrets in Render's environment settings, not in source control.
 
-See `.env.example`. `MAX_UPLOAD_BYTES` controls the maximum accepted PDF size. `OPENAI_API_KEY` enables model-generated answers; without it, the API returns a relevant retrieved passage. Store secrets in your deployment platform's secret manager.
-
-## Operational notes
-
-This provides a safer single-instance deployment baseline, not a fully managed production platform. Before handling sensitive or high-volume workloads, add per-user authentication/authorization, rate limiting, malware scanning, retention/deletion workflows, monitoring and alerting, and external durable storage. Scanned PDFs require OCR, which is not included. PDF text and model output should be treated as untrusted content.
+This is a safer single-instance deployment baseline, not a fully managed production platform. Before handling sensitive or high-volume workloads, add per-user authentication/authorization, rate limiting, malware scanning, retention/deletion workflows, monitoring and alerting. Scanned PDFs require OCR, which is not included. Treat PDF content and model output as untrusted.
