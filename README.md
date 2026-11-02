@@ -1,63 +1,50 @@
 # AI PDF RAG Chatbot
 
-A lightweight Python starter for uploading PDF documents and chatting with them using retrieval-augmented generation (RAG).
+A FastAPI starter for extracting text from PDFs, retrieving relevant passages with FAISS, and answering questions with an OpenAI-compatible chat model.
 
-Features:
-- Upload one or more PDFs
-- Extract and chunk text from PDF files
-- Generate embeddings with `sentence-transformers`
-- Search relevant passages with FAISS
-- Answer questions with an LLM (OpenAI-compatible API when configured)
-- Simple web UI for uploading and chatting
+## Run locally
 
-## Tech stack
-- FastAPI
-- Python
-- PyMuPDF
-- FAISS
-- SentenceTransformers
-- OpenAI SDK (optional for LLM answers)
+Requires Python 3.11 and a working C/C++ runtime for FAISS/ML dependencies.
 
-## Quick start
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+# Set OPENAI_API_KEY and a long random API_KEY in .env before exposing the service.
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
 
-1. Create a virtual environment:
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   ```
+Open http://127.0.0.1:8000. The first upload downloads the sentence-transformer model, so initial indexing can take time and needs network access.
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Docker deployment
 
-3. Copy environment variables:
-   ```bash
-   cp .env.example .env
-   ```
+1. Set strong, secret values for `API_KEY` and `OPENAI_API_KEY` in `.env`; do not commit `.env`.
+2. Start with `docker compose up --build -d`.
+3. Put a TLS-terminating reverse proxy/load balancer in front of the service before public exposure. Keep the service bound to localhost unless network ingress is intentionally configured.
+4. Back up the `app_data` volume. The local FAISS index is single-instance storage; do not run multiple replicas against it. For horizontal scale, replace it with shared object storage and a managed vector database.
 
-4. Add your OpenAI API key in `.env` if you want real model answers.
+API requests need `Authorization: Bearer <API_KEY>` when `API_KEY` is configured. If no key is configured, API authentication is disabled; do not expose that configuration publicly.
 
-5. Run the app:
-   ```bash
-   uvicorn app.main:app --reload
-   ```
+## API
 
-6. Open the app in your browser:
-   ```text
-   http://localhost:8000
-   ```
+- `GET /health/live` — process liveness
+- `GET /health/ready` — readiness
+- `POST /api/upload` — multipart field `file`; default upload limit is 20 MiB
+- `POST /api/chat` — JSON body `{"question":"..."}`
 
-## API endpoints
+Example:
 
-- `GET /api/health` — health check
-- `POST /api/upload` — upload a PDF and index it
-- `POST /api/chat` — ask a question based on indexed PDFs
+```bash
+curl -H "Authorization: Bearer $API_KEY" -F "file=@document.pdf" http://127.0.0.1:8000/api/upload
+curl -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"question":"What is this document about?"}' http://127.0.0.1:8000/api/chat
+```
 
-## Environment variables
+## Configuration
 
-See `.env.example` for configuration options.
+See `.env.example`. `MAX_UPLOAD_BYTES` controls the maximum accepted PDF size. `OPENAI_API_KEY` enables model-generated answers; without it, the API returns a relevant retrieved passage. Store secrets in your deployment platform's secret manager.
 
-## Notes
+## Operational notes
 
-This is a starter project intended for local development and experimentation. It is not a production-ready deployment template.
+This provides a safer single-instance deployment baseline, not a fully managed production platform. Before handling sensitive or high-volume workloads, add per-user authentication/authorization, rate limiting, malware scanning, retention/deletion workflows, monitoring and alerting, and external durable storage. Scanned PDFs require OCR, which is not included. PDF text and model output should be treated as untrusted content.
